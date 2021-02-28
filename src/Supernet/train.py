@@ -3,6 +3,7 @@ import sys
 import torch
 import argparse
 import torch.nn as nn
+import torchvision
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import cv2
@@ -64,7 +65,7 @@ def get_args():
     parser = argparse.ArgumentParser("ShuffleNetV2_OneShot")
     parser.add_argument('--eval', default=False, action='store_true')
     parser.add_argument('--eval-resume', type=str, default='./snet_detnas.pkl', help='path for eval model')
-    parser.add_argument('--batch-size', type=int, default=1024, help='batch size')
+    parser.add_argument('--batch-size', type=int, default=96, help='batch size')
     parser.add_argument('--total-iters', type=int, default=150000, help='total iters')
     parser.add_argument('--learning-rate', type=float, default=0.5, help='init learning rate')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
@@ -79,9 +80,31 @@ def get_args():
 
     parser.add_argument('--train-dir', type=str, default='data/train', help='path to training dataset')
     parser.add_argument('--val-dir', type=str, default='data/val', help='path to validation dataset')
+    parser.add_argument('--cifar10', type=bool, default=False, help='use cifar10 dataset')
+    parser.add_argument('--data_dir', type=str, default='./cifar10data/', help='path to the cifar10 dataset')
 
     args = parser.parse_args()
     return args
+
+def data_transforms(args):
+    MEAN = [0.49139968, 0.48215827, 0.44653124]
+    STD = [0.24703233, 0.24348505, 0.26158768]
+
+    train_transform = transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            # transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.2),
+            transforms.ToTensor(),
+            transforms.Normalize(MEAN, STD)
+        ])
+
+    valid_transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(MEAN, STD)
+    ]) 
+
+    return train_transform, valid_transform
+
 
 def main():
     args = get_args()
@@ -102,8 +125,10 @@ def main():
     if torch.cuda.is_available():
         use_gpu = True
 
-    assert os.path.exists(args.train_dir)
-    train_dataset = datasets.ImageFolder(
+    if args.cifar10 == False:
+
+        assert os.path.exists(args.train_dir)
+        train_dataset = datasets.ImageFolder(
         args.train_dir,
         transforms.Compose([
             transforms.RandomResizedCrop(224),
@@ -111,24 +136,40 @@ def main():
             transforms.RandomHorizontalFlip(0.5),
             ToBGRTensor(),
         ])
-    )
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=True,
-        num_workers=1, pin_memory=use_gpu)
-    train_dataprovider = DataIterator(train_loader)
+        )
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, batch_size=args.batch_size, shuffle=True,
+            num_workers=1, pin_memory=use_gpu)
+        train_dataprovider = DataIterator(train_loader)
 
-    assert os.path.exists(args.val_dir)
-    val_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(args.val_dir, transforms.Compose([
-            OpencvResize(256),
-            transforms.CenterCrop(224),
-            ToBGRTensor(),
-        ])),
-        batch_size=200, shuffle=False,
-        num_workers=1, pin_memory=use_gpu
-    )
-    val_dataprovider = DataIterator(val_loader)
-    print('load data successfully')
+        assert os.path.exists(args.val_dir)
+        val_loader = torch.utils.data.DataLoader(
+            datasets.ImageFolder(args.val_dir, transforms.Compose([
+                OpencvResize(256),
+                transforms.CenterCrop(224),
+                ToBGRTensor(),
+            ])),
+            batch_size=200, shuffle=False,
+            num_workers=1, pin_memory=use_gpu
+        )
+        val_dataprovider = DataIterator(val_loader)
+        print('load imagenet data successfully')
+
+    else:
+        train_transform, valid_transform = data_transforms(args)
+        
+        trainset = torchvision.datasets.CIFAR10(root=os.path.join(args.data_dir, 'cifar'), train=True,
+                                                download=True, transform=train_transform)
+        train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size,
+                                                   shuffle=True, pin_memory=True, num_workers=8)
+        train_dataprovider = DataIterator(train_loader)
+        valset = torchvision.datasets.CIFAR10(root=os.path.join(args.data_dir, 'cifar'), train=False,
+                                              download=True, transform=valid_transform)
+        val_loader = torch.utils.data.DataLoader(valset, batch_size=args.batch_size,
+                                                 shuffle=False, pin_memory=True, num_workers=8)
+        val_dataprovider = DataIterator(val_loader)
+
+        print('load cifar10 data successfully')
 
     model = ShuffleNetV2_OneShot()
 
